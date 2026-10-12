@@ -1,14 +1,12 @@
-# Ledger — Zahlungsplattform mit doppelter Buchführung
+# Ledger — double-entry payment platform
 
 [![CI](https://github.com/alafoudhaili/ledger/actions/workflows/ci.yml/badge.svg)](https://github.com/alafoudhaili/ledger/actions)
 
-Ein Zahlungs- und Hauptbuchdienst mit Spring Boot 3, Java 17 und PostgreSQL. Jede Überweisung erzeugt genau zwei Buchungszeilen — Soll und Haben — in einem Hauptbuch, das ausschließlich angehängt und niemals verändert wird.
-
-*A payment and ledger service in Spring Boot 3, Java 17 and PostgreSQL. Every transfer writes exactly two entries — debit and credit — into an append-only ledger.*
+A payment and ledger service built with Spring Boot 3, Java 17 and PostgreSQL. Every transfer writes exactly two entries — debit and credit — into an append-only ledger.
 
 ---
 
-## Schnellstart
+## Quickstart
 
 ```bash
 git clone https://github.com/alafoudhaili/ledger.git
@@ -16,47 +14,47 @@ cd ledger
 docker compose up
 ```
 
-Die API liegt anschließend auf `http://localhost:8080`.
+The API is then available at `http://localhost:8080`.
 
 ```bash
-# Überweisung — der Idempotenzschlüssel kommt als Header
+# Transfer — the idempotency key is passed as a header
 curl -X POST http://localhost:8080/api/v1/transfers \
   -H "Idempotency-Key: 7f3c1e90-abc1-4d2e-9f11-2a4c8b6e5d10" \
   -H "Content-Type: application/json" \
   -d '{"sourceIban":"DE89370400440532013000","targetIban":"GB29NWBK60161331926819","amountMinor":2500}'
 
-# Derselbe Aufruf ein zweites Mal → 200 statt 201, keine zweite Buchung
+# Same call a second time → 200 instead of 201, no second booking
 
-# Abstimmung: Summe Soll gegen Summe Haben
+# Reconciliation: sum of debits against sum of credits
 curl http://localhost:8080/api/v1/transfers/reconciliation
 ```
 
-## Was dieses Projekt zeigt
+## What this project demonstrates
 
-**Doppelte Buchführung.** Der Kontosaldo ist eine abgeleitete Größe; die Wahrheit liegt in den Buchungszeilen. `LedgerEntry` hat bewusst keine Setter und keinen Update-Pfad — eine Korrektur ist eine Gegenbuchung, keine Änderung. Der Abstimmungs-Endpunkt beweist jederzeit, dass Soll und Haben übereinstimmen.
+**Double-entry bookkeeping.** The account balance is a derived value; the truth lives in the ledger entries. `LedgerEntry` deliberately has no setters and no update path — a correction is a reversing entry, not a change. The reconciliation endpoint proves at any time that debits and credits match.
 
-**Idempotenz.** Der Idempotenzschlüssel liegt auf einem eindeutigen Index in der Datenbank, nicht in einer Prüfung im Anwendungscode. Damit verhindert die Datenbank die Doppelbuchung auch dann, wenn zwei Instanzen des Dienstes denselben Retry gleichzeitig verarbeiten. Ein wiederholter Aufruf liefert dieselbe Transfer-ID mit `replayed: true`.
+**Idempotency.** The idempotency key sits on a unique database index, not on an application-level check. That means the database prevents double-booking even when two instances of the service process the same retry at the same time. A repeated call returns the same transfer ID with `replayed: true`.
 
-**Optimistic Locking.** Konten tragen ein `@Version`-Feld. Zwei gleichzeitige Überweisungen vom selben Konto können sich nicht gegenseitig überschreiben — eine gewinnt, die andere erhält HTTP 409 und darf gefahrlos wiederholt werden. Der Test `concurrentTransfersKeepLedgerBalanced` startet zehn Threads gegen dasselbe Konto und prüft, dass am Ende kein Cent verloren gegangen ist.
+**Optimistic locking.** Accounts carry an `@Version` field. Two concurrent transfers from the same account can't overwrite each other — one wins, the other gets HTTP 409 and can safely retry. The `concurrentTransfersKeepLedgerBalanced` test fires ten threads against the same account and checks that not a single cent is lost at the end.
 
-**IBAN-Prüfung nach ISO 13616.** Das Modulo-97-Verfahren ist bewusst ohne Fremdbibliothek implementiert, damit der Algorithmus im Code sichtbar bleibt. Getestet tabellengetrieben gegen bekannte Gut- und Schlechtfälle.
+**IBAN validation per ISO 13616.** The modulo-97 algorithm is deliberately implemented without a third-party library, so the logic stays visible in the code. Tested table-driven against known valid and invalid cases.
 
-**Beträge als `long` in Cent.** Niemals `double` für Geld. Die kleinste Währungseinheit vermeidet Rundungsfehler vollständig.
+**Amounts as `long` in cents.** Never `double` for money. The smallest currency unit avoids rounding errors entirely.
 
-## Architektur
+## Architecture
 
 ```
   HTTP
     │
     ▼
-  TransferController ──── Idempotency-Key als Header, ProblemDetail als Fehlerformat
+  TransferController ──── Idempotency-Key as a header, ProblemDetail as the error format
     │
     ▼
-  LedgerService ───────── @Transactional: Validierung, Buchung, Saldenfortschreibung
+  LedgerService ───────── @Transactional: validation, booking, balance updates
     │
-    ├── AccountRepository        Konten mit @Version (Optimistic Locking)
-    ├── TransferRepository       eindeutiger Index auf idempotency_key
-    └── LedgerEntryRepository    append-only Buchungszeilen
+    ├── AccountRepository        accounts with @Version (optimistic locking)
+    ├── TransferRepository       unique index on idempotency_key
+    └── LedgerEntryRepository    append-only ledger entries
     │
     ▼
   PostgreSQL
@@ -68,24 +66,24 @@ curl http://localhost:8080/api/v1/transfers/reconciliation
 mvn verify
 ```
 
-Die Integrationstests starten PostgreSQL über Testcontainers — es ist keine lokal installierte Datenbank nötig, nur ein laufender Docker-Daemon. Der Abdeckungsbericht liegt nach dem Lauf unter `target/site/jacoco/index.html`.
+Integration tests start PostgreSQL via Testcontainers — no locally installed database is needed, just a running Docker daemon. The coverage report lands at `target/site/jacoco/index.html` after the run.
 
-| Test | Prüft |
+| Test | Verifies |
 |---|---|
-| `IbanTest` | Modulo-97-Prüfsumme, Gut- und Schlechtfälle |
-| `writesTwoEntriesPerTransfer` | genau zwei Zeilen, Salden korrekt, Hauptbuch ausgeglichen |
-| `replaysInsteadOfDoubleBooking` | derselbe Schlüssel bucht nicht erneut |
-| `rejectsOverdraft` | keine Buchung ohne Deckung, keine Teilbuchung |
-| `concurrentTransfersKeepLedgerBalanced` | zehn parallele Überweisungen, kein Saldoverlust |
+| `IbanTest` | modulo-97 checksum, valid and invalid cases |
+| `writesTwoEntriesPerTransfer` | exactly two entries, correct balances, balanced ledger |
+| `replaysInsteadOfDoubleBooking` | the same key doesn't book a second time |
+| `rejectsOverdraft` | no booking without sufficient funds, no partial booking |
+| `concurrentTransfersKeepLedgerBalanced` | ten parallel transfers, no balance loss |
 
-## Nächste Schritte
+## Next steps
 
-- [ ] Kafka: `TransferInitiated` publizieren, Buchung asynchron im Ledger-Service konsumieren
-- [ ] Kubernetes-Manifeste inklusive Ingress und Secrets, lokal auf k3s
-- [ ] Angular-Dashboard: Konten, Umsätze, Abstimmungsansicht
-- [ ] SEPA-Export nach `pain.001.001.09`
-- [ ] Architekturentscheidungen als ADRs unter `docs/adr/`
+- [ ] Kafka: publish `TransferInitiated`, consume the booking asynchronously in the ledger service
+- [ ] Kubernetes manifests including ingress and secrets, running locally on k3s
+- [ ] Angular dashboard: accounts, transactions, reconciliation view
+- [ ] SEPA export to `pain.001.001.09`
+- [ ] Architecture decisions recorded as ADRs under `docs/adr/`
 
-## Lizenz
+## License
 
 MIT
