@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+      - name: Build und Tests
+        run: mvn -B verify
+      - name: Testbericht
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jacoco-report
+          path: target/site/jacoco/
